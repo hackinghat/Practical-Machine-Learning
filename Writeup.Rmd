@@ -1,0 +1,139 @@
+---
+title: "Practical Machine Learning: Writeup"
+author: "Steve Knight"
+date: "Tuesday, May 19, 2015"
+output: html_document
+---
+
+This file can be viewed on GitHub as HTML [here](http://hackinghat.github.io/Practical-Machine-Learning/).
+
+
+```{r,echo=FALSE,warning=FALSE}
+# Helper functions and library loads
+set.seed(19619)
+library(RCurl)
+library(caret)
+library(RANN)
+
+getFile<-function (url, dest) {
+  if (!file.exists(dest)) {
+    writeLines(getURL(url), dest)
+  }
+  read.csv(dest)
+}
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+# Data cleaning
+clean<-function(data) {
+  # Drop username, X, raw_timestamp_part_1/2, new_window
+  drops<-list("X","user_name","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp")
+  for (cx in setdiff(names(data),c("timestamp","classe"))) {
+    if(is.factor(data[,cx]) && length(setdiff(levels(data[,cx]), c("","#DIV/0!", "0.00"))) == 0) {
+      drops<-append(drops, cx)
+    } else {
+      if(sum(is.na(data[,cx]))==nrow(data)) {
+        drops<-append(drops, cx)
+      } else {
+        n<-sum((data[,cx]==0.0 | data[,cx] == "#DIV!/0") & !is.na(data[,cx]))
+        if (n==nrow(data)) {
+          drops<-append(drops, cx)
+        } else {
+          # Replace empty string and div/0 with NA
+          data[,cx][(data[,cx]==""|data[,cx]=="#DIV!/0")]<-NA
+          data[,cx]<-as.numeric(data[,cx])
+        }
+      }
+    }
+  }
+  data[,-which(names(data) %in% drops)]
+}
+
+plotConfusion<-function(confusion) {
+  plot <- ggplot(confusion)
+  plot + geom_tile(aes(x=Reference, y=Prediction, fill=Freq)) + 
+      geom_text(aes(x=Reference, y=Prediction, fill=Freq, label=Freq)) +
+      scale_x_discrete(name="Actual Class") + 
+      scale_y_discrete(name="Predicted Class") + 
+      scale_fill_gradient(breaks=seq(from=-.5, to=4, by=.2)) + 
+      labs(fill="Frequency") 
+}
+```
+
+# Introduction
+
+http://groupware.les.inf.puc-rio.br/har
+
+
+# Data cleaning
+
+The original data set contains many unset, empty and error values across almost variables.   We first take this data and remove any columns that contain no observations.  
+
+```{r,cache=TRUE,echo=FALSE,warning=FALSE}
+# Get and clean the data
+training<-clean(getFile("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "pml-training.csv"))
+testing<-clean(getFile("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "pml-testing.csv"))
+# Find the remaining common columns (we can only ultimately test these so building a model with extra ones is a bit daft)
+common<-intersect(names(training),names(testing))
+training<-training[,c("classe",common)]
+testing<-testing[,common]
+```
+ 
+# Preprocessing
+ 
+We split our training set into two parts, the model training and validation sets.   
+With the remaining data we impute missing data using K-nearest neighbours and then standardise the data with Box-Cox transformations.   Then to ake the data more manageable we use PCA (Prinicpal Component Analysis) to reduce the data-set to a set of useful predictors.
+ 
+```{r,cache=TRUE,warning=FALSE}
+inTest<-createDataPartition(training$classe, p=0.96, list=FALSE)
+modelTraining<-training[-inTest,]
+modelTesting<-training[inTest,]
+preProc<-preProcess(modelTraining[,-1],method=c("center", "scale", "knnImpute", "pca"))
+```
+ 
+# Model training
+ 
+We then use the pre-processed principal components to train the model.
+ 
+```{r,cache=TRUE,warning=FALSE}
+modelTrainingPCA<-predict(preProc, modelTraining[,-1])
+mod<-train(modelTraining$classe~.,method="rf", data=modelTrainingPCA)
+```
+ 
+# Prediction
+ 
+Finally we use the model to calculate the in and out-of-sample error.   It can be seen (below) from the plot of the confusion matrix that the model accurately predicts the correct 'classe' for every sample of the training (i.e. Actual=Predicted)
+
+
+```{r,cache=TRUE,echo=FALSE,warning=FALSE}
+trainConf<-confusionMatrix(modelTraining$classe, predict(mod, modelTrainingPCA))
+plotConfusion(as.data.frame(trainConf$table))
+```
+
+It can be seen that the model less accurately predicts the model testing data because the actual and predicted classes are the same.  If we then use the same pre-processor we can generate a new set of principal components for the test set to examine our out-of sample error.
+
+```{r,cache=TRUE}
+modelTestingPCA<-predict(preProc, modelTesting[,-1])
+modelTestingConf<-confusionMatrix(modelTesting$classe, predict(mod, modelTestingPCA))
+modelTestingConf
+```
+
+```{r,cache=TRUE,echo=FALSE}
+plotConfusion(as.data.frame(modelTestingConf$table))
+```
+
+# Testing output 
+
+```{r,cache=TRUE,echo=FALSE}
+testingPCA<-predict(preProc, testing)
+dir.create("answers", showWarnings=FALSE)
+setwd("answers")
+pml_write_files(predict(mod, testingPCA))
+setwd("..")
+```
