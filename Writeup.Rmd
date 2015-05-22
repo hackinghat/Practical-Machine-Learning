@@ -6,22 +6,22 @@ output: html_document
 ---
 
 This file can be viewed on GitHub as HTML [here](http://hackinghat.github.io/Practical-Machine-Learning/).
-
-
+ 
+ 
 ```{r,echo=FALSE,warning=FALSE}
 # Helper functions and library loads
 set.seed(19619)
 library(RCurl)
 library(caret)
 library(RANN)
-
+ 
 getFile<-function (url, dest) {
   if (!file.exists(dest)) {
     writeLines(getURL(url), dest)
   }
   read.csv(dest)
 }
-
+ 
 pml_write_files = function(x){
   n = length(x)
   for(i in 1:n){
@@ -29,7 +29,7 @@ pml_write_files = function(x){
     write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
   }
 }
-
+ 
 # Data cleaning
 clean<-function(data) {
   # Drop username, X, raw_timestamp_part_1/2, new_window
@@ -54,27 +54,30 @@ clean<-function(data) {
   }
   data[,-which(names(data) %in% drops)]
 }
-
+ 
 plotConfusion<-function(confusion) {
   plot <- ggplot(confusion)
-  plot + geom_tile(aes(x=Reference, y=Prediction, fill=Freq)) + 
+  plot + geom_tile(aes(x=Reference, y=Prediction, fill=Freq)) +
       geom_text(aes(x=Reference, y=Prediction, fill=Freq, label=Freq)) +
-      scale_x_discrete(name="Actual Class") + 
-      scale_y_discrete(name="Predicted Class") + 
-      scale_fill_gradient(breaks=seq(from=-.5, to=4, by=.2)) + 
-      labs(fill="Frequency") 
+      scale_x_discrete(name="Actual Class") +
+      scale_y_discrete(name="Predicted Class") +
+      scale_fill_gradient(breaks=seq(from=-.5, to=4, by=.2)) +
+      labs(fill="Frequency")
 }
 ```
-
-# Introduction
-
-http://groupware.les.inf.puc-rio.br/har
-
-
-# Data cleaning
-
-The original data set contains many unset, empty and error values across almost variables.   We first take this data and remove any columns that contain no observations.  
-
+ 
+### Introduction
+ 
+Human activity recognition is a key research area, and in 2013 a group of [researchers](http://groupware.les.inf.puc-rio.br/har) attempted to use wearable accelerometers to try to answer the question as to whether it's possible to identify a variety of particular weight-lifting exercises from the measurements of those accelerometers.  
+ 
+This paper attempts to reproduce their findings use machine learnings techniques learnt from [Practical Machine Learning](https://class.coursera.org/predmachlearn-014) an online Coursera course.
+ 
+Based on our model and test set we achieve
+ 
+### Exploratory Analysis & Data cleaning
+ 
+The supplied data set contains many unset, empty and error values across almost all of the 100+ variables.   We first take this data and standardise the data so that each numeric variable consists of either a number or 'NA' in the test and the training sets.    We then reduce both sets to include just the columns that are non-empty and common to both data sets.   This is important since the test set has more unset variables than the training set, which will cause the model to fail to produce a prediction.
+ 
 ```{r,cache=TRUE,echo=FALSE,warning=FALSE}
 # Get and clean the data
 training<-clean(getFile("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "pml-training.csv"))
@@ -84,54 +87,57 @@ common<-intersect(names(training),names(testing))
 training<-training[,c("classe",common)]
 testing<-testing[,common]
 ```
+
+### Preprocessing
+We split our training set into two parts, the model training and a cross-validation test set.   With the remaining data we impute missing data using K-nearest neighbours and then center and scale the measurements to rationalise the readings.  
  
-# Preprocessing
- 
-We split our training set into two parts, the model training and validation sets.   
-With the remaining data we impute missing data using K-nearest neighbours and then standardise the data with Box-Cox transformations.   Then to ake the data more manageable we use PCA (Prinicpal Component Analysis) to reduce the data-set to a set of useful predictors.
- 
+Given the large number of variables we then use PCA (Prinicpal Component Analysis) to find the smallest number of variables that can account for 95% of the variance in the data.   This further reduces the data-set to a set of approximately 30 principal components.
 ```{r,cache=TRUE,warning=FALSE}
-inTest<-createDataPartition(training$classe, p=0.96, list=FALSE)
+inTest<-createDataPartition(training$classe, p=0.2, list=FALSE)
 modelTraining<-training[-inTest,]
 modelTesting<-training[inTest,]
 preProc<-preProcess(modelTraining[,-1],method=c("center", "scale", "knnImpute", "pca"))
 ```
- 
-# Model training
- 
-We then use the pre-processed principal components to train the model.
+
+### Model training
+With the calculated principal components it is possible to train a 'Random Forest' model that is capable of taking a similarly constructed set of pre-processed input data and produce predictions of the 'classe' variable.
  
 ```{r,cache=TRUE,warning=FALSE}
 modelTrainingPCA<-predict(preProc, modelTraining[,-1])
 mod<-train(modelTraining$classe~.,method="rf", data=modelTrainingPCA)
 ```
- 
-# Prediction
- 
-Finally we use the model to calculate the in and out-of-sample error.   It can be seen (below) from the plot of the confusion matrix that the model accurately predicts the correct 'classe' for every sample of the training (i.e. Actual=Predicted)
 
+### Prediction and Sample Errors
 
+Finally we use the model to calculate the in and out-of-sample error.   We would expect the out-of-sample error to be higher than the in-sample error because the predicted model will have a tendency to overfit the data.   It can be seen from the below plot of the confusion matrix that the model accurately predicts the correct 'classe' for every sample of the training (i.e. Actual=Predicted).  
+ 
 ```{r,cache=TRUE,echo=FALSE,warning=FALSE}
 trainConf<-confusionMatrix(modelTraining$classe, predict(mod, modelTrainingPCA))
 plotConfusion(as.data.frame(trainConf$table))
 ```
-
-It can be seen that the model less accurately predicts the model testing data because the actual and predicted classes are the same.  If we then use the same pre-processor we can generate a new set of principal components for the test set to examine our out-of sample error.
-
+ 
+If we then use the same pre-processor we can generate a new set of principal components for the test set to examine our out-of sample error.   It can be seen below that the model less accurately predicts our cross-validation test data because the actual and predicted classes are not always the same along the diagonal, the confusion matrix suggests though that this is still a good predictive model. 
+ 
 ```{r,cache=TRUE}
 modelTestingPCA<-predict(preProc, modelTesting[,-1])
 modelTestingConf<-confusionMatrix(modelTesting$classe, predict(mod, modelTestingPCA))
 modelTestingConf
 ```
-
+ 
 ```{r,cache=TRUE,echo=FALSE}
 plotConfusion(as.data.frame(modelTestingConf$table))
 ```
-
-# Testing output 
-
-```{r,cache=TRUE,echo=FALSE}
+ 
+### Testing output
+ 
+With our suitably trained model we then attempt to predict the 'classe' from the testing data where the true outcomes are not known.
+ 
+```{r,cache=TRUE}
 testingPCA<-predict(preProc, testing)
+predict(mod, testingPCA)
+```
+ 
+```{r,cache=TRUE,echo=FALSE,warning=FALSE}
 dir.create("answers", showWarnings=FALSE)
 setwd("answers")
 pml_write_files(predict(mod, testingPCA))
